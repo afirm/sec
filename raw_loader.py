@@ -1,15 +1,15 @@
 import pandas as pd
 import re
+import os
 
-def load_sanitized_data(file_path='res/raw.xlsx', output_path='res/sanitized.xlsx'):
-    # Load Excel file
-    df = pd.read_excel(file_path)
-
-    # Define Persian character mapping
+def sanitize_dataframe(df):
+    """
+    Sanitize all values in a DataFrame using Persian normalization rules.
+    """
     persian_map = {
         'ي': 'ی',
         'ك': 'ک',
-        '\u200c': ' ',
+        '\u200c': ' ',  # ZWNJ to space
     }
 
     def sanitize(text):
@@ -19,16 +19,66 @@ def load_sanitized_data(file_path='res/raw.xlsx', output_path='res/sanitized.xls
         text = text.replace(', ', '&&&')
         for arabic_char, persian_char in persian_map.items():
             text = text.replace(arabic_char, persian_char)
-        text = text.replace('&&&', 'AMP')
+        text = text.replace('&&&', 'ampersand')
         text = re.sub(r'[^a-zA-Z0-9\u0600-\u06FF\s]', '', text)
-        text = text.replace('AMP', '&&&')
+        text = text.lower()  # Convert all English letters to lowercase here
+        text = text.replace('ampersand', '&&&')
         text = re.sub(r'\s+', ' ', text).strip()
         return text
 
-    # Apply sanitization
-    sanitized_df = df.map(sanitize)
+    return df.map(sanitize)
 
-    # # Save to Excel
-    # sanitized_df.to_excel(output_path, index=False)
 
-    return sanitized_df
+def load_sanitized_data(file_path):
+    """
+    Load and sanitize a single-sheet Excel file.
+    Applies special rules for 'after.xlsx' and 'sales.xlsx'.
+    """
+    try:
+        df = pd.read_excel(file_path)
+        df = sanitize_dataframe(df)
+
+        filename = os.path.basename(file_path).lower()
+
+        if 'after' in filename:
+            if 'نام خودرو' in df.columns:
+                df['نام خودرو'] = df['نام خودرو'].apply(lambda x: x if x else 'عمومی')
+        elif 'sales' in filename:
+            if 'نام خودرو' not in df.columns:
+                df['نام خودرو'] = 'عمومی'
+
+        return df
+
+    except Exception as e:
+        print(f"Error loading {file_path}: {e}")
+        return pd.DataFrame()
+
+
+def load_all_sanitized_sheets(file_path):
+    """
+    Load and sanitize all worksheets in an Excel file.
+    Returns a dictionary {sheet_name: sanitized DataFrame}.
+    Applies same special handling as load_sanitized_data.
+    """
+    try:
+        excel_file = pd.ExcelFile(file_path)
+        sanitized_sheets = {}
+        filename = os.path.basename(file_path).lower()
+
+        for sheet_name in excel_file.sheet_names:
+            df = pd.read_excel(file_path, sheet_name=sheet_name)
+            df = sanitize_dataframe(df)
+
+            if 'after' in filename:
+                if 'نام خودرو' in df.columns:
+                    df['نام خودرو'] = df['نام خودرو'].apply(lambda x: x if x else 'عمومی')
+            elif 'sales' in filename:
+                if 'نام خودرو' not in df.columns:
+                    df['نام خودرو'] = 'عمومی'
+
+            sanitized_sheets[sheet_name] = df
+
+        return sanitized_sheets
+    except Exception as e:
+        print(f"Error loading sheets from {file_path}: {e}")
+        return {}
