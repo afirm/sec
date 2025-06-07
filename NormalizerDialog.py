@@ -2,12 +2,13 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QTabWidget, QTableWidget,
     QTableWidgetItem, QPushButton, QHBoxLayout, 
     QHeaderView, QWidget, QLabel, QComboBox,
-    QLineEdit, QHBoxLayout, QProgressBar
+    QLineEdit, QHBoxLayout, QProgressBar, QMessageBox
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 import csv
 import os
 import pandas as pd
+
 
 class CourseDataLoader(QThread):
     """Background thread to load course data"""
@@ -41,6 +42,7 @@ class CourseDataLoader(QThread):
         # Emit the data
         self.data_ready.emit(raw_courses, all_standard_courses)
 
+
 class NormalizerDialog(QDialog):
     def __init__(self, parent, raw_df, dealers_df, after_sheets, sales_sheets):
         super().__init__(parent)
@@ -63,16 +65,18 @@ class NormalizerDialog(QDialog):
         layout = QVBoxLayout()
         self.tabs = QTabWidget()
         
-        # Create lighter tabs
+        # Create tabs
         self.position_tab = self.create_position_tab()
         self.car_tab = self.create_car_tab()
         self.company_tab = self.create_company_tab()
         self.course_tab = self.create_course_tab_placeholder()
+        self.dealer_tab = self.create_dealer_tab()  # New dealer tab
         
         self.tabs.addTab(self.position_tab, "Position Mappings")
         self.tabs.addTab(self.car_tab, "Car Category Mappings")
         self.tabs.addTab(self.company_tab, "Company Mappings")
         self.tabs.addTab(self.course_tab, "Course Mappings")
+        self.tabs.addTab(self.dealer_tab, "Dealer Binding")  # Add dealer tab
         
         # Connect tab change
         self.tabs.currentChanged.connect(self.on_tab_changed)
@@ -99,6 +103,50 @@ class NormalizerDialog(QDialog):
         self.course_loader = CourseDataLoader(raw_df, after_sheets, sales_sheets)
         self.course_loader.data_ready.connect(self.on_course_data_ready)
         self.course_loader.start()
+    
+    def create_dealer_tab(self):
+        """Create dealer binding tab"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        # Add instruction label
+        info_label = QLabel("Map dealer names from raw data to standardized names:")
+        info_label.setStyleSheet("font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(info_label)
+        
+        # Extract unique dealers from raw data
+        if 'عنوان نمایندگی' in self.raw_df.columns:
+            raw_dealers = self.raw_df['عنوان نمایندگی'].dropna().unique().tolist()
+        else:
+            raw_dealers = []
+        
+        # Create table
+        table = QTableWidget()
+        table.setColumnCount(2)
+        table.setHorizontalHeaderLabels(["Raw Dealer Name", "Mapped Dealer Name"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setRowCount(len(raw_dealers))
+        
+        for i, dealer in enumerate(raw_dealers):
+            # Raw dealer name (read-only)
+            raw_item = QTableWidgetItem(dealer)
+            raw_item.setFlags(raw_item.flags() & ~Qt.ItemIsEditable)  # Make read-only
+            table.setItem(i, 0, raw_item)
+            
+            # Mapped dealer name (editable)
+            mapped_item = QTableWidgetItem(dealer)  # Default to same name
+            table.setItem(i, 1, mapped_item)
+        
+        layout.addWidget(table)
+        self.dealer_table = table
+        
+        # Add tip label
+        tip_label = QLabel("Tip: Edit the 'Mapped Dealer Name' column to rename dealers. Leave blank to keep original name.")
+        tip_label.setStyleSheet("color: gray; font-size: 10px; margin-top: 5px;")
+        layout.addWidget(tip_label)
+        
+        widget.setLayout(layout)
+        return widget
     
     def create_course_tab_placeholder(self):
         """Create a simple placeholder for course tab"""
@@ -378,10 +426,32 @@ class NormalizerDialog(QDialog):
         return widget
     
     def load_mappings(self):
-        """Load existing mappings for position, car, and company tabs"""
+        """Load existing mappings for position, car, company, and dealer tabs"""
         self.load_mapping_file('mappings/position_mapping.csv', self.position_table, 'position')
         self.load_mapping_file('mappings/car_mapping.csv', self.car_table, 'car')
         self.load_mapping_file('mappings/company_mapping.csv', self.company_table, 'company')
+        self.load_dealer_mappings()
+    
+    def load_dealer_mappings(self):
+        """Load dealer mappings from file"""
+        path = 'mappings/dealer_mapping.csv'
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                next(reader)  # Skip header
+                
+                mapping_dict = {}
+                for row in reader:
+                    if len(row) >= 2:
+                        mapping_dict[row[0]] = row[1]
+                
+                # Apply mappings to dealer table
+                for row in range(self.dealer_table.rowCount()):
+                    raw_item = self.dealer_table.item(row, 0)
+                    if raw_item and raw_item.text() in mapping_dict:
+                        mapped_item = self.dealer_table.item(row, 1)
+                        if mapped_item:
+                            mapped_item.setText(mapping_dict[raw_item.text()])
     
     def load_mapping_file(self, path, table, tab_type):
         """Load mapping file for non-course tabs"""
@@ -413,13 +483,34 @@ class NormalizerDialog(QDialog):
         self.save_mapping_type('position', self.position_table, 'position_mapping.csv')
         self.save_mapping_type('car', self.car_table, 'car_mapping.csv')
         self.save_mapping_type('company', self.company_table, 'company_mapping.csv')
+        self.save_dealer_mappings()
         
         # Save course mappings if initialized
         if hasattr(self, 'course_table'):
             self.save_current_course_mappings()
             self.save_course_mappings()
         
+        # Show success message
+        QMessageBox.information(self, "Success", "All mappings saved successfully!")
         self.accept()
+    
+    def save_dealer_mappings(self):
+        """Save dealer mappings"""
+        path = os.path.join("mappings", "dealer_mapping.csv")
+        
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Raw", "Mapped"])
+            
+            for row in range(self.dealer_table.rowCount()):
+                raw_item = self.dealer_table.item(row, 0)
+                mapped_item = self.dealer_table.item(row, 1)
+                
+                raw = raw_item.text() if raw_item else ""
+                mapped = mapped_item.text() if mapped_item else ""
+                
+                if raw and mapped and raw != mapped:  # Only save if different from original
+                    writer.writerow([raw, mapped])
     
     def save_mapping_type(self, map_type, table, filename):
         """Save mappings for non-course tabs"""
@@ -450,3 +541,5 @@ class NormalizerDialog(QDialog):
             for raw, mapped in self.course_mappings.items():
                 if raw and mapped:
                     writer.writerow([raw, mapped])
+
+
