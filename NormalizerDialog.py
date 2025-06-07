@@ -2,204 +2,24 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QTabWidget, QTableWidget,
     QTableWidgetItem, QPushButton, QHBoxLayout, 
     QHeaderView, QWidget, QLabel, QComboBox,
-    QLineEdit, QHBoxLayout  # Add these imports
+    QLineEdit, QHBoxLayout, QProgressBar
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 import csv
 import os
 import pandas as pd
 
-class NormalizerDialog(QDialog):
-    def __init__(self, parent, raw_df, dealers_df, after_sheets, sales_sheets):
-        super().__init__(parent)
-        self.setWindowTitle("Data Normalization Tool")
-        self.setGeometry(300, 300, 1000, 700)
-        
-        # Store references to data
+class CourseDataLoader(QThread):
+    """Background thread to load course data"""
+    data_ready = pyqtSignal(list, list)
+    
+    def __init__(self, raw_df, after_sheets, sales_sheets):
+        super().__init__()
         self.raw_df = raw_df
-        self.dealers_df = dealers_df
         self.after_sheets = after_sheets
         self.sales_sheets = sales_sheets
-        
-        layout = QVBoxLayout()
-        self.tabs = QTabWidget()
-        
-        # Create tabs for different mappings
-        self.position_tab = self.create_position_tab()
-        self.car_tab = self.create_car_tab()
-        self.company_tab = self.create_company_tab()
-        self.course_tab = self.create_course_tab()
-        
-        self.tabs.addTab(self.position_tab, "Position Mappings")
-        self.tabs.addTab(self.car_tab, "Car Category Mappings")
-        self.tabs.addTab(self.company_tab, "Company Mappings")
-        # In NormalizerDialog.__init__ after creating other tabs
-
-        self.tabs.addTab(self.course_tab, "Course Mappings")
-        
-        # Buttons
-        btn_layout = QHBoxLayout()
-        self.save_btn = QPushButton("Save Mappings")
-        self.cancel_btn = QPushButton("Cancel")
-        
-        self.save_btn.clicked.connect(self.save_mappings)
-        self.cancel_btn.clicked.connect(self.reject)
-        
-        btn_layout.addWidget(self.save_btn)
-        btn_layout.addWidget(self.cancel_btn)
-        
-        layout.addWidget(self.tabs)
-        layout.addLayout(btn_layout)
-        self.setLayout(layout)
-        
-        # Load existing mappings
-        self.load_mappings()
     
-    def create_position_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout()
-        
-        # Extract unique positions from raw data
-        main_positions = self.raw_df['عنوان شغل'].dropna().unique().tolist()
-        alt_positions = self.raw_df['شغل موازی (ارتقا)'].dropna().str.split('&&&').explode().str.strip().unique().tolist()
-        all_positions = sorted(set(main_positions + alt_positions))
-        
-        # Extract ALL unique positions from after data
-        after_positions = set()
-        for sheet_name, df in self.after_sheets.items():
-            if 'پست کاری' in df.columns:
-                after_positions.update(df['پست کاری'].dropna().astype(str).unique())
-        
-        # Extract ALL unique positions from sales data
-        sales_positions = set()
-        for sheet_name, df in self.sales_sheets.items():
-            if 'پست کاری' in df.columns:
-                sales_positions.update(df['پست کاری'].dropna().astype(str).unique())
-        
-        # Combine all standardized positions
-        all_standard_positions = sorted(after_positions.union(sales_positions))
-        
-        # Create table with suggestions
-        table = QTableWidget()
-        table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Raw Position", "Mapped Position", "Suggested Mappings"])
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setRowCount(len(all_positions))
-        
-        for i, position in enumerate(all_positions):
-            table.setItem(i, 0, QTableWidgetItem(position))
-            table.setItem(i, 1, QTableWidgetItem(""))
-            
-            # Create combo box with ALL standard positions
-            combo = QComboBox()
-            combo.addItem("")  # Empty option
-            for std_pos in all_standard_positions:
-                combo.addItem(std_pos)
-            
-            table.setCellWidget(i, 2, combo)
-        
-        layout.addWidget(table)
-        self.position_table = table
-        widget.setLayout(layout)
-        return widget
-    
-    def create_car_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout()
-        
-        # Extract car categories from dealers data (columns D-AV)
-        car_categories = self.dealers_df.columns[3:48].tolist()
-        
-        # Extract ALL unique car names from after data
-        after_cars = set()
-        for sheet_name, df in self.after_sheets.items():
-            if 'نام خودرو' in df.columns:
-                after_cars.update(df['نام خودرو'].dropna().astype(str).unique())
-        
-        # Extract ALL unique car names from sales data
-        sales_cars = set()
-        for sheet_name, df in self.sales_sheets.items():
-            if 'نام خودرو' in df.columns:
-                sales_cars.update(df['نام خودرو'].dropna().astype(str).unique())
-        
-        # Combine all standardized car names
-        all_standard_cars = sorted(after_cars.union(sales_cars))
-        
-        # Create table with suggestions
-        table = QTableWidget()
-        table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Raw Category", "Mapped Car", "Suggested Mappings"])
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setRowCount(len(car_categories))
-        
-        for i, category in enumerate(car_categories):
-            table.setItem(i, 0, QTableWidgetItem(category))
-            table.setItem(i, 1, QTableWidgetItem(""))
-            
-            # Create combo box with ALL standard cars
-            combo = QComboBox()
-            combo.addItem("")  # Empty option
-            for car in all_standard_cars:
-                combo.addItem(car)
-            
-            table.setCellWidget(i, 2, combo)
-        
-        layout.addWidget(table)
-        self.car_table = table
-        widget.setLayout(layout)
-        return widget
-    
-    def create_company_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout()
-        
-        # Extract unique companies from raw data
-        companies = self.raw_df['company'].dropna().unique().tolist()
-        
-        # Extract sheet names from after data
-        after_sheets = sorted(self.after_sheets.keys())
-        
-        # Extract sheet names from sales data
-        sales_sheets = sorted(self.sales_sheets.keys())
-        
-        # Combine all sheet names
-        all_sheets = sorted(set(after_sheets).union(set(sales_sheets)))
-        
-        # Create table with suggestions
-        table = QTableWidget()
-        table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Raw Company", "Mapped Company", "Suggested Mappings"])
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setRowCount(len(companies))
-        
-        for i, company in enumerate(companies):
-            table.setItem(i, 0, QTableWidgetItem(company))
-            table.setItem(i, 1, QTableWidgetItem(""))
-            
-            # Create combo box with ALL sheet names
-            combo = QComboBox()
-            combo.addItem("")  # Empty option
-            for sheet in all_sheets:
-                combo.addItem(sheet)
-            
-            table.setCellWidget(i, 2, combo)
-        
-        layout.addWidget(table)
-        self.company_table = table
-        widget.setLayout(layout)
-        return widget
-    
-    # Add this to your NormalizerDialog class
-    
-    def filter_course_table(self):
-        """Filter course table based on search text"""
-        search_text = self.course_search.text()
-        self.populate_course_table(search_text)
-
-    def create_course_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout()
-        
+    def run(self):
         # Extract unique courses from raw data
         raw_courses = self.raw_df['عنوان دوره'].dropna().unique().tolist()
         
@@ -216,80 +36,355 @@ class NormalizerDialog(QDialog):
                 sales_courses.update(df['نام دوره آموزشی'].dropna().astype(str).unique())
         
         # Combine all standardized courses
-        self.all_standard_courses = sorted(after_courses.union(sales_courses))
+        all_standard_courses = sorted(after_courses.union(sales_courses))
+        
+        # Emit the data
+        self.data_ready.emit(raw_courses, all_standard_courses)
+
+class NormalizerDialog(QDialog):
+    def __init__(self, parent, raw_df, dealers_df, after_sheets, sales_sheets):
+        super().__init__(parent)
+        self.setWindowTitle("Data Normalization Tool")
+        self.setGeometry(300, 300, 1000, 700)
+        
+        # Make dialog non-modal
+        self.setModal(False)
+        
+        # Store references to data
+        self.raw_df = raw_df
+        self.dealers_df = dealers_df
+        self.after_sheets = after_sheets
+        self.sales_sheets = sales_sheets
+        
+        # Store all course mappings separately
+        self.course_mappings = {}
+        self.course_data_loaded = False
+        
+        layout = QVBoxLayout()
+        self.tabs = QTabWidget()
+        
+        # Create lighter tabs
+        self.position_tab = self.create_position_tab()
+        self.car_tab = self.create_car_tab()
+        self.company_tab = self.create_company_tab()
+        self.course_tab = self.create_course_tab_placeholder()
+        
+        self.tabs.addTab(self.position_tab, "Position Mappings")
+        self.tabs.addTab(self.car_tab, "Car Category Mappings")
+        self.tabs.addTab(self.company_tab, "Company Mappings")
+        self.tabs.addTab(self.course_tab, "Course Mappings")
+        
+        # Connect tab change
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        self.save_btn = QPushButton("Save Mappings")
+        self.cancel_btn = QPushButton("Cancel")
+        
+        self.save_btn.clicked.connect(self.save_mappings)
+        self.cancel_btn.clicked.connect(self.reject)
+        
+        btn_layout.addWidget(self.save_btn)
+        btn_layout.addWidget(self.cancel_btn)
+        
+        layout.addWidget(self.tabs)
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+        
+        # Load existing mappings for other tabs
+        self.load_mappings()
+        
+        # Start background course data loading
+        self.course_loader = CourseDataLoader(raw_df, after_sheets, sales_sheets)
+        self.course_loader.data_ready.connect(self.on_course_data_ready)
+        self.course_loader.start()
+    
+    def create_course_tab_placeholder(self):
+        """Create a simple placeholder for course tab"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        self.course_loading_label = QLabel("Loading course data in background...")
+        self.course_loading_label.setAlignment(Qt.AlignCenter)
+        
+        self.course_progress = QProgressBar()
+        self.course_progress.setRange(0, 0)  # Indeterminate progress
+        
+        layout.addWidget(self.course_loading_label)
+        layout.addWidget(self.course_progress)
+        layout.addStretch()
+        
+        widget.setLayout(layout)
+        return widget
+    
+    def on_course_data_ready(self, raw_courses, standard_courses):
+        """Handle when course data is ready"""
+        self.raw_course_list = raw_courses
+        self.all_standard_courses = standard_courses
+        self.course_data_loaded = True
+        
+        # Update the placeholder
+        self.course_loading_label.setText("Course data loaded! Click to initialize course mappings.")
+        self.course_progress.hide()
+        
+        # If user is currently on course tab, initialize it
+        if self.tabs.currentIndex() == 3:
+            self.initialize_course_tab()
+    
+    def on_tab_changed(self, index):
+        """Handle tab changes"""
+        if index == 3 and self.course_data_loaded and not hasattr(self, 'course_table'):
+            self.initialize_course_tab()
+    
+    def initialize_course_tab(self):
+        """Initialize the actual course tab"""
+        if not self.course_data_loaded or hasattr(self, 'course_table'):
+            return
+        
+        # Replace the placeholder with actual course tab
+        self.course_tab = self.create_actual_course_tab()
+        self.tabs.removeTab(3)
+        self.tabs.insertTab(3, self.course_tab, "Course Mappings")
+        self.tabs.setCurrentIndex(3)
+        
+        # Load course mappings
+        self.load_course_mappings()
+    
+    def create_actual_course_tab(self):
+        """Create the actual course tab with table"""
+        widget = QWidget()
+        layout = QVBoxLayout()
         
         # Create search bar
         search_layout = QHBoxLayout()
         search_label = QLabel("Search Courses:")
         self.course_search = QLineEdit()
-        self.course_search.setPlaceholderText("Type to filter courses...")
+        self.course_search.setPlaceholderText("Type to filter courses (showing first 20 by default)...")
         self.course_search.textChanged.connect(self.filter_course_table)
         
         search_layout.addWidget(search_label)
         search_layout.addWidget(self.course_search)
         layout.addLayout(search_layout)
         
-        # Create table with suggestions
+        # Create table - start small
         table = QTableWidget()
-        table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Raw Course", "Mapped Course", "Available Standard Courses"])
+        table.setColumnCount(2)  # Simplified: just Raw and Mapped
+        table.setHorizontalHeaderLabels(["Raw Course", "Mapped Course"])
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setRowCount(len(raw_courses))
         
         self.course_table = table
-        self.raw_course_list = raw_courses
         
-        # Populate the table
-        self.populate_course_table()
+        # Show only first 20 courses initially
+        self.populate_course_table_simple(limit=20)
         
         layout.addWidget(table)
+        
+        # Add instruction label
+        info_label = QLabel("Tip: Use search to find specific courses. Total courses: " + str(len(self.raw_course_list)))
+        info_label.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(info_label)
+        
         widget.setLayout(layout)
         return widget
-
-    def populate_course_table(self, filter_text=""):
-        """Populate the course table with optional filtering"""
+    
+    def populate_course_table_simple(self, filter_text="", limit=None):
+        """Populate course table with simplified approach"""
+        if not hasattr(self, 'course_table'):
+            return
+            
         filter_text = filter_text.lower()
         
-        # Clear existing rows
-        self.course_table.setRowCount(0)
+        # Save current mappings
+        self.save_current_course_mappings()
         
-        # Filter courses based on search text
-        filtered_courses = self.raw_course_list
+        # Filter courses
         if filter_text:
             filtered_courses = [course for course in self.raw_course_list 
                                if filter_text in course.lower()]
+        else:
+            filtered_courses = self.raw_course_list
         
-        # Set new row count
+        # Apply limit
+        if limit and not filter_text:
+            filtered_courses = filtered_courses[:limit]
+        
+        # Clear and populate table
         self.course_table.setRowCount(len(filtered_courses))
         
-        # Populate the table
         for i, course in enumerate(filtered_courses):
             self.course_table.setItem(i, 0, QTableWidgetItem(course))
-            self.course_table.setItem(i, 1, QTableWidgetItem(""))
             
-            # Create label with standard courses (filtered if needed)
-            if filter_text:
-                # Filter standard courses that match the search
-                filtered_standard = [sc for sc in self.all_standard_courses 
-                                    if filter_text in sc.lower()]
-                standard_label = QLabel(", ".join(filtered_standard))
-            else:
-                standard_label = QLabel(", ".join(self.all_standard_courses))
-                
-            standard_label.setWordWrap(True)
-            standard_label.setAlignment(Qt.AlignTop)
-            self.course_table.setCellWidget(i, 2, standard_label)
-
-
-    def load_mappings(self):
-        # Load existing mappings if available
-        self.load_mapping_file('mappings/position_mapping.csv', self.position_table)
-        self.load_mapping_file('mappings/car_mapping.csv', self.car_table)
-        self.load_mapping_file('mappings/company_mapping.csv', self.company_table)
-        self.load_mapping_file('mappings/course_mapping.csv', self.course_table)
-
+            # Restore mapping from persistent storage
+            mapped_value = self.course_mappings.get(course, "")
+            self.course_table.setItem(i, 1, QTableWidgetItem(mapped_value))
     
-    def load_mapping_file(self, path, table):
+    def filter_course_table(self):
+        """Filter course table based on search text"""
+        if not hasattr(self, 'course_table'):
+            return
+        search_text = self.course_search.text()
+        self.populate_course_table_simple(search_text)
+    
+    def save_current_course_mappings(self):
+        """Save current course mappings from visible table rows"""
+        if not hasattr(self, 'course_table'):
+            return
+            
+        for row in range(self.course_table.rowCount()):
+            raw_item = self.course_table.item(row, 0)
+            mapped_item = self.course_table.item(row, 1)
+            
+            if raw_item:
+                raw_text = raw_item.text()
+                mapped_text = mapped_item.text() if mapped_item else ""
+                
+                if mapped_text:
+                    self.course_mappings[raw_text] = mapped_text
+                elif raw_text in self.course_mappings:
+                    del self.course_mappings[raw_text]
+    
+    def load_course_mappings(self):
+        """Load course mappings from file"""
+        path = 'mappings/course_mapping.csv'
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                next(reader)  # Skip header
+                
+                for row in reader:
+                    if len(row) >= 2:
+                        self.course_mappings[row[0]] = row[1]
+    
+    def create_position_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        # Extract unique positions from raw data
+        main_positions = self.raw_df['عنوان شغل'].dropna().unique().tolist()
+        alt_positions = self.raw_df['شغل موازی (ارتقا)'].dropna().str.split('&&&').explode().str.strip().unique().tolist()
+        all_positions = sorted(set(main_positions + alt_positions))
+        
+        # Extract positions from after and sales data
+        after_positions = set()
+        for sheet_name, df in self.after_sheets.items():
+            if 'پست کاری' in df.columns:
+                after_positions.update(df['پست کاری'].dropna().astype(str).unique())
+        
+        sales_positions = set()
+        for sheet_name, df in self.sales_sheets.items():
+            if 'پست کاری' in df.columns:
+                sales_positions.update(df['پست کاری'].dropna().astype(str).unique())
+        
+        all_standard_positions = sorted(after_positions.union(sales_positions))
+        
+        # Create simplified table
+        table = QTableWidget()
+        table.setColumnCount(2)
+        table.setHorizontalHeaderLabels(["Raw Position", "Mapped Position"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setRowCount(len(all_positions))
+        
+        for i, position in enumerate(all_positions):
+            table.setItem(i, 0, QTableWidgetItem(position))
+            
+            # Create combo box with standard positions
+            combo = QComboBox()
+            combo.addItem("")
+            for std_pos in all_standard_positions:
+                combo.addItem(std_pos)
+            
+            table.setCellWidget(i, 1, combo)
+        
+        layout.addWidget(table)
+        self.position_table = table
+        widget.setLayout(layout)
+        return widget
+    
+    def create_car_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        # Extract car categories from dealers data
+        car_categories = self.dealers_df.columns[3:48].tolist()
+        
+        # Extract car names from after and sales data
+        after_cars = set()
+        for sheet_name, df in self.after_sheets.items():
+            if 'نام خودرو' in df.columns:
+                after_cars.update(df['نام خودرو'].dropna().astype(str).unique())
+        
+        sales_cars = set()
+        for sheet_name, df in self.sales_sheets.items():
+            if 'نام خودرو' in df.columns:
+                sales_cars.update(df['نام خودرو'].dropna().astype(str).unique())
+        
+        all_standard_cars = sorted(after_cars.union(sales_cars))
+        
+        # Create simplified table
+        table = QTableWidget()
+        table.setColumnCount(2)
+        table.setHorizontalHeaderLabels(["Raw Category", "Mapped Car"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setRowCount(len(car_categories))
+        
+        for i, category in enumerate(car_categories):
+            table.setItem(i, 0, QTableWidgetItem(category))
+            
+            # Create combo box
+            combo = QComboBox()
+            combo.addItem("")
+            for car in all_standard_cars:
+                combo.addItem(car)
+            
+            table.setCellWidget(i, 1, combo)
+        
+        layout.addWidget(table)
+        self.car_table = table
+        widget.setLayout(layout)
+        return widget
+    
+    def create_company_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        # Extract companies and sheet names
+        companies = self.raw_df['company'].dropna().unique().tolist()
+        after_sheets = sorted(self.after_sheets.keys())
+        sales_sheets = sorted(self.sales_sheets.keys())
+        all_sheets = sorted(set(after_sheets).union(set(sales_sheets)))
+        
+        # Create simplified table
+        table = QTableWidget()
+        table.setColumnCount(2)
+        table.setHorizontalHeaderLabels(["Raw Company", "Mapped Company"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setRowCount(len(companies))
+        
+        for i, company in enumerate(companies):
+            table.setItem(i, 0, QTableWidgetItem(company))
+            
+            # Create combo box
+            combo = QComboBox()
+            combo.addItem("")
+            for sheet in all_sheets:
+                combo.addItem(sheet)
+            
+            table.setCellWidget(i, 1, combo)
+        
+        layout.addWidget(table)
+        self.company_table = table
+        widget.setLayout(layout)
+        return widget
+    
+    def load_mappings(self):
+        """Load existing mappings for position, car, and company tabs"""
+        self.load_mapping_file('mappings/position_mapping.csv', self.position_table, 'position')
+        self.load_mapping_file('mappings/car_mapping.csv', self.car_table, 'car')
+        self.load_mapping_file('mappings/company_mapping.csv', self.company_table, 'company')
+    
+    def load_mapping_file(self, path, table, tab_type):
+        """Load mapping file for non-course tabs"""
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
                 reader = csv.reader(f)
@@ -304,30 +399,30 @@ class NormalizerDialog(QDialog):
                 for row in range(table.rowCount()):
                     raw_item = table.item(row, 0)
                     if raw_item and raw_item.text() in mapping_dict:
-                        # Set mapped value
-                        table.setItem(row, 1, QTableWidgetItem(mapping_dict[raw_item.text()]))
-                        
-                        # Also select matching value in combo box if possible
-                        combo = table.cellWidget(row, 2)
+                        combo = table.cellWidget(row, 1)
                         if combo:
                             index = combo.findText(mapping_dict[raw_item.text()])
                             if index >= 0:
                                 combo.setCurrentIndex(index)
     
     def save_mappings(self):
-        # Create mappings directory if not exists
+        """Save all mappings"""
         os.makedirs("mappings", exist_ok=True)
         
-        # Save each mapping type
+        # Save non-course mappings
         self.save_mapping_type('position', self.position_table, 'position_mapping.csv')
         self.save_mapping_type('car', self.car_table, 'car_mapping.csv')
         self.save_mapping_type('company', self.company_table, 'company_mapping.csv')
-        self.save_mapping_type('course', self.course_table, 'course_mapping.csv')
-
+        
+        # Save course mappings if initialized
+        if hasattr(self, 'course_table'):
+            self.save_current_course_mappings()
+            self.save_course_mappings()
         
         self.accept()
     
     def save_mapping_type(self, map_type, table, filename):
+        """Save mappings for non-course tabs"""
         path = os.path.join("mappings", filename)
         
         with open(path, 'w', encoding='utf-8', newline='') as f:
@@ -335,17 +430,23 @@ class NormalizerDialog(QDialog):
             writer.writerow(["Raw", "Mapped"])
             
             for row in range(table.rowCount()):
-                raw = table.item(row, 0).text() if table.item(row, 0) else ""
+                raw_item = table.item(row, 0)
+                raw = raw_item.text() if raw_item else ""
                 
-                if map_type == 'course':
-                    # For course tab, mapped text is from column 1 (QTableWidgetItem)
-                    mapped = table.item(row, 1).text() if table.item(row, 1) else ""
-                else:
-                    # For other tabs, mapped text is from combobox widget in column 2
-                    combo = table.cellWidget(row, 2)
-                    mapped = combo.currentText() if combo else ""
+                combo = table.cellWidget(row, 1)
+                mapped = combo.currentText() if combo else ""
                 
                 if raw and mapped:
                     writer.writerow([raw, mapped])
-
-
+    
+    def save_course_mappings(self):
+        """Save course mappings from persistent storage"""
+        path = os.path.join("mappings", "course_mapping.csv")
+        
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Raw", "Mapped"])
+            
+            for raw, mapped in self.course_mappings.items():
+                if raw and mapped:
+                    writer.writerow([raw, mapped])

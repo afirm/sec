@@ -16,10 +16,14 @@ def sanitize_dataframe(df):
         if pd.isna(text):
             return ""
         text = str(text)
+        text = text.replace('pds , ','pds و ')
+        text = text.replace('ISO 10002 , ISO 10004','ISO 10002 و ISO 10004')
+
         text = text.replace(', ', '&&&')
         for arabic_char, persian_char in persian_map.items():
             text = text.replace(arabic_char, persian_char)
         text = text.replace('&&&', 'ampersand')
+        text = text.replace('،', '')
         text = re.sub(r'[^a-zA-Z0-9\u0600-\u06FF\s]', '', text)
         text = text.lower()  # Convert all English letters to lowercase here
         text = text.replace('ampersand', '&&&')

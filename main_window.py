@@ -357,7 +357,6 @@ class MainWindow(QMainWindow):
                     if len(row) >= 2:
                         mapping_dict[row[0]] = row[1]
 
-
     def show_personnel_info(self, item):
         if not item:
             return
@@ -388,6 +387,9 @@ class MainWindow(QMainWindow):
         def colored_courses(courses, passed_set):
             parts = []
             for c in courses:
+                # Skip empty or invalid courses
+                if not c or str(c).strip() == "" or str(c).strip() == "nan":
+                    continue
                 if c in passed_set:
                     parts.append(f'<span style="background-color:#a2c1d5;">{c}</span>')  # light green
                 else:
@@ -409,10 +411,14 @@ class MainWindow(QMainWindow):
             for _, row in sales_df.iterrows():
                 row_pos = str(row.get("پست کاری", "")).strip()
                 if row_pos == mapped_position:
-                    criteria = str(row.get("نام دوره آموزشی", "")).strip()
-                    course = str(row.get("نام سرفصل", "")).strip()
+                    # Swap the columns - A is actually course, C is actually criteria
+                    course = str(row.get("نام دوره آموزشی", "")).strip()  # Column A
+                    criteria = str(row.get("نام سرفصل", "")).strip()      # Column C
                     car = "فروش"
-                    grouped["sales"][car][criteria].append(course)
+                    
+                    # Skip empty or invalid criteria/courses
+                    if criteria and criteria != "nan" and course and course != "nan":
+                        grouped["sales"][car][criteria].append(course)
 
         # --- New: Determine criteria passed or not ---
         # Criteria is passed if:
@@ -467,18 +473,27 @@ class MainWindow(QMainWindow):
                 # Car header with passed/total and percent
                 criteria_html_parts.append(
                     f'<div style="margin-right:20px;"><b>خودرو: {car} - '
-                    f'{passed_criteria} از {total_criteria} (٪{percent:.1f})</b><br>'
+                    f'{passed_criteria} از {total_criteria} (٪{percent:.1f})</b></div><br>'
                 )
             
                 for crit, courses in crits.items():
+                    # Skip empty criteria or courses
+                    if not crit or not courses or all(not c for c in courses):
+                        continue
+                        
                     passed = pass_status[file_name][car].get(crit, False)
                     bgcolor = "#a8d5a2" if passed else "#f8a5a5"  # light green or light red
                     course_html = colored_courses(courses, passed_set)
+                    
+                    # Skip if course_html is empty or only contains dashes/spaces
+                    if not course_html.strip() or course_html.strip() == "&mdash;":
+                        continue
+                        
                     criteria_html_parts.append(
                         f'<div style="margin-right:40px; background-color:{bgcolor}; padding:4px; border-radius:4px; margin-bottom:3px;">'
                         f'{crit} ({course_html})</div>'
                     )
-                criteria_html_parts.append('</div><br>')
+                criteria_html_parts.append('<br>')
 
         overall_percent = (overall_passed / overall_total * 100) if overall_total else 0
 
